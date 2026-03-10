@@ -1,0 +1,156 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: .
+    container_name: protocare_backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - mlflow
+      - ollama
+    environment:
+      DATABASE_URL: postgresql://cliniq:cliniq@postgres:5432/cliniq
+      CHROMA_DIR: /core/chroma_db
+      PDF_PATH: /core/docs/manual.md
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - .:/core
+      - chroma_data:/core/chroma_db
+    restart: always
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: protocare_streamlit
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    restart: always
+
+  postgres:
+    image: postgres:15
+    container_name: protocare_postgres
+    environment:
+      POSTGRES_USER: cliniq
+      POSTGRES_PASSWORD: cliniq
+      POSTGRES_DB: cliniq
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  adminer:
+    image: adminer
+    container_name: protocare_adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: always
+
+  ollama:
+    image: ollama/ollama
+    container_name: protocare_ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_MODEL=llama3.1:8b
+      - OLLAMA_FAST_MODEL=llama3.2:3b
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+  ollama-pull:
+    image: ollama/ollama
+    container_name: protocare_ollama_pull
+    depends_on:
+      - ollama
+    entrypoint: >
+      /bin/sh -c "
+        sleep 10 &&
+        ollama pull llama3.1:8b &&
+        ollama pull llama3.2:3b
+      "
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: on-failure
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.10.0
+    container_name: protocare_mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --allowed-hosts "*"
+    environment:
+      - GIT_PYTHON_REFRESH=quiet
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    restart: always
+
+  prometheus:
+    image: prom/prometheus
+    container_name: protocare_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: always
+
+  grafana:
+    image: grafana/grafana
+    container_name: protocare_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    restart: always
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor
+    container_name: vitaquest_cadvisor
+    ports:
+     - "8070:8080"
+    volumes:
+     - /:/rootfs:ro
+     - /var/run:/var/run:ro
+     - /sys:/sys:ro
+     - /var/lib/docker/:/var/lib/docker:ro
+
+volumes:
+  postgres_data:
+  mlflow_data:
+  grafana_data:
+  chroma_data:
+  ollama_data:
